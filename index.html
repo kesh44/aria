@@ -3,74 +3,53 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Carb &amp; insulin calculator</title>
+  <title>carb &amp; insulin calculator</title>
 </head>
 <body>
-  <h1>Carb &amp; insulin calculator</h1>
-  <p>UK metrics. Enter carbs per 100 g, portion in grams, and your insulin-to-carb ratio (1 unit covers how many grams of carbohydrate).</p>
+  <h1>carb &amp; insulin calculator</h1>
+  <p>uk metrics. foods, icr history, and the calculation log are editable lists stored in cookies on this browser.</p>
 
+  <h2>calculate</h2>
   <form id="calc-form">
     <p>
-      <label for="carb-per-100">Carbs per 100 g (g)</label><br>
-      <input type="number" id="carb-per-100" name="carb-per-100" min="0" step="any" required>
+      <label for="food-select">food</label><br>
+      <select id="food-select"></select>
     </p>
     <p>
-      <label for="portion-g">Portion (g)</label><br>
-      <input type="number" id="portion-g" name="portion-g" min="0" step="any" required>
+      <label for="carb-per-100">carbs per 100 g (g)</label><br>
+      <input type="number" id="carb-per-100" min="0" step="any" required>
     </p>
     <p>
-      <label for="icr">Insulin-to-carb ratio (1 unit : X g carbs)</label><br>
-      <input type="number" id="icr" name="icr" min="0.1" step="any" required>
+      <label for="portion-g">portion (g)</label><br>
+      <input type="number" id="portion-g" min="0" step="any" required>
     </p>
     <p>
-      <label for="note">Note (optional)</label><br>
-      <input type="text" id="note" name="note" maxlength="80">
+      <label for="icr-select">icr</label><br>
+      <select id="icr-select"></select>
     </p>
     <p>
-      <button type="submit">Calculate &amp; log</button>
+      <label for="note">note (optional)</label><br>
+      <input type="text" id="note" maxlength="80">
+    </p>
+    <p>
+      <button type="submit">calculate &amp; log</button>
     </p>
   </form>
+  <p id="result">no calculation yet.</p>
 
-  <h2>Result</h2>
-  <p id="result">No calculation yet.</p>
-
-  <h2>Log</h2>
-  <p>
-    <button type="button" id="clear-log">Clear log</button>
-  </p>
-  <table id="log-table" border="1" cellpadding="4" cellspacing="0">
-    <thead>
-      <tr>
-        <th>When</th>
-        <th>Carbs / 100 g</th>
-        <th>Portion (g)</th>
-        <th>Carbs (g)</th>
-        <th>ICR</th>
-        <th>Insulin (U)</th>
-        <th>Note</th>
-      </tr>
-    </thead>
-    <tbody id="log-body">
-    </tbody>
-  </table>
+  <div id="foods-panel"></div>
+  <div id="icr-panel"></div>
+  <div id="log-panel"></div>
 
   <script>
     (function () {
-      var COOKIE_ICR = "aria_icr";
-      var COOKIE_LOG = "aria_log";
-      // ~10 years — as permanent as cookies get
       var MAX_AGE = 60 * 60 * 24 * 365 * 10;
-      // Stay under typical ~4 KB cookie limit (name + value + attrs)
-      var MAX_LOG_CHARS = 3500;
+      var MAX_CHARS = 3500;
 
-      function setCookie(name, value, maxAge) {
+      function setCookie(name, value) {
         document.cookie =
-          encodeURIComponent(name) +
-          "=" +
-          encodeURIComponent(value) +
-          "; path=/; max-age=" +
-          maxAge +
-          "; SameSite=Lax";
+          encodeURIComponent(name) + "=" + encodeURIComponent(value) +
+          "; path=/; max-age=" + MAX_AGE + "; SameSite=Lax";
       }
 
       function getCookie(name) {
@@ -85,146 +64,517 @@
         return null;
       }
 
-      function loadIcr() {
-        var raw = getCookie(COOKIE_ICR);
-        if (raw !== null && raw !== "" && !isNaN(Number(raw)) && Number(raw) > 0) {
-          document.getElementById("icr").value = raw;
-        } else {
-          document.getElementById("icr").value = "10";
-        }
-      }
-
-      function saveIcr(icr) {
-        setCookie(COOKIE_ICR, String(icr), MAX_AGE);
-      }
-
-      function loadLog() {
-        var raw = getCookie(COOKIE_LOG);
-        if (!raw) return [];
-        try {
-          var parsed = JSON.parse(raw);
-          return Array.isArray(parsed) ? parsed : [];
-        } catch (e) {
-          return [];
-        }
-      }
-
-      function saveLog(entries) {
-        // Drop oldest entries until the cookie fits
-        var copy = entries.slice();
-        while (copy.length > 0) {
-          var value = JSON.stringify(copy);
-          if (value.length <= MAX_LOG_CHARS) {
-            setCookie(COOKIE_LOG, value, MAX_AGE);
-            return copy;
-          }
-          copy.shift();
-        }
-        setCookie(COOKIE_LOG, "[]", MAX_AGE);
-        return [];
-      }
-
       function round(n, places) {
         var f = Math.pow(10, places);
-        return Math.round(n * f) / f;
+        return Math.round(Number(n) * f) / f;
+      }
+
+      function newId() {
+        return String(Date.now()) + "-" + Math.floor(Math.random() * 1000);
+      }
+
+      function toLocalInput(iso) {
+        if (!iso) return "";
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return "";
+        var pad = function (n) { return n < 10 ? "0" + n : String(n); };
+        return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+          "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+      }
+
+      function fromLocalInput(value) {
+        if (!value) return new Date().toISOString();
+        var d = new Date(value);
+        return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
       }
 
       function formatWhen(iso) {
-        try {
-          return new Date(iso).toLocaleString("en-GB");
-        } catch (e) {
-          return iso;
-        }
+        try { return new Date(iso).toLocaleString("en-GB"); }
+        catch (e) { return iso || ""; }
       }
 
-      function renderLog(entries) {
-        var tbody = document.getElementById("log-body");
-        tbody.innerHTML = "";
-        // Newest first
-        for (var i = entries.length - 1; i >= 0; i--) {
-          var e = entries[i];
-          var tr = document.createElement("tr");
-          var cells = [
-            formatWhen(e.t),
-            e.c100,
-            e.g,
-            e.carbs,
-            e.icr,
-            e.u,
-            e.note || ""
-          ];
-          for (var j = 0; j < cells.length; j++) {
-            var td = document.createElement("td");
-            td.textContent = cells[j];
-            tr.appendChild(td);
+      /* ---------- cookie list store ---------- */
+      function Store(cookieName, opts) {
+        opts = opts || {};
+        var maxChars = opts.maxChars || MAX_CHARS;
+        var trimOldest = !!opts.trimOldest;
+
+        function all() {
+          var raw = getCookie(cookieName);
+          if (!raw) return [];
+          try {
+            var parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch (e) {
+            return [];
           }
-          tbody.appendChild(tr);
         }
-      }
 
-      function calculate(carbPer100, portionG, icr) {
-        var carbs = (carbPer100 / 100) * portionG;
-        var units = carbs / icr;
+        function write(items) {
+          var copy = items.slice();
+          while (true) {
+            var value = JSON.stringify(copy);
+            if (value.length <= maxChars) {
+              setCookie(cookieName, value);
+              return { ok: true, items: copy };
+            }
+            if (!trimOldest || copy.length === 0) {
+              return { ok: false, items: items, error: "storage full — remove some entries first." };
+            }
+            copy.shift();
+          }
+        }
+
         return {
-          carbs: round(carbs, 2),
-          units: round(units, 2)
+          all: all,
+          write: write,
+          get: function (id) {
+            var items = all();
+            for (var i = 0; i < items.length; i++) {
+              if (items[i].id === id) return items[i];
+            }
+            return null;
+          },
+          create: function (data) {
+            var items = all();
+            var row = Object.assign({ id: newId() }, data);
+            items.push(row);
+            var result = write(items);
+            return result.ok ? { ok: true, row: row, items: result.items } : result;
+          },
+          update: function (id, data) {
+            var items = all();
+            var found = false;
+            for (var i = 0; i < items.length; i++) {
+              if (items[i].id === id) {
+                items[i] = Object.assign({}, items[i], data, { id: id });
+                found = true;
+                break;
+              }
+            }
+            if (!found) return { ok: false, error: "entry not found." };
+            var result = write(items);
+            return result.ok ? { ok: true, items: result.items } : result;
+          },
+          remove: function (id) {
+            var items = all().filter(function (row) { return row.id !== id; });
+            return write(items);
+          }
         };
       }
 
+      /* ---------- generic crud panel ---------- */
+      function Crud(mount, config) {
+        var store = config.store;
+        var fields = config.fields;
+        var editingId = null;
+        var listeners = [];
+
+        var title = document.createElement("h2");
+        title.textContent = config.title;
+        mount.appendChild(title);
+
+        var form = document.createElement("form");
+        mount.appendChild(form);
+
+        var inputs = {};
+        fields.forEach(function (field) {
+          var p = document.createElement("p");
+          var label = document.createElement("label");
+          label.textContent = field.label + (field.optional ? " — optional" : "");
+          p.appendChild(label);
+          p.appendChild(document.createElement("br"));
+
+          var input;
+          if (field.type === "textarea") {
+            input = document.createElement("textarea");
+            input.rows = 2;
+          } else {
+            input = document.createElement("input");
+            input.type = field.type || "text";
+            if (field.min != null) input.min = field.min;
+            if (field.step != null) input.step = field.step;
+            if (field.maxLength != null) input.maxLength = field.maxLength;
+          }
+          if (field.required) input.required = true;
+          input.name = field.key;
+          inputs[field.key] = input;
+          p.appendChild(input);
+          form.appendChild(p);
+        });
+
+        var actions = document.createElement("p");
+        var submitBtn = document.createElement("button");
+        submitBtn.type = "submit";
+        submitBtn.textContent = "add";
+        var cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.textContent = "cancel";
+        cancelBtn.hidden = true;
+        actions.appendChild(submitBtn);
+        actions.appendChild(document.createTextNode(" "));
+        actions.appendChild(cancelBtn);
+        form.appendChild(actions);
+
+        var msg = document.createElement("p");
+        mount.appendChild(msg);
+
+        var table = document.createElement("table");
+        table.border = "1";
+        table.cellPadding = "4";
+        table.cellSpacing = "0";
+        var thead = document.createElement("thead");
+        var headRow = document.createElement("tr");
+        fields.forEach(function (field) {
+          var th = document.createElement("th");
+          th.textContent = field.label;
+          headRow.appendChild(th);
+        });
+        var thActions = document.createElement("th");
+        thActions.textContent = "";
+        headRow.appendChild(thActions);
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+        var tbody = document.createElement("tbody");
+        table.appendChild(tbody);
+        mount.appendChild(table);
+
+        function setMessage(text) {
+          msg.textContent = text || "";
+        }
+
+        function readForm() {
+          var data = {};
+          for (var i = 0; i < fields.length; i++) {
+            var field = fields[i];
+            var raw = inputs[field.key].value;
+            if (field.type === "number") {
+              if (raw === "" || raw == null) {
+                if (field.optional) data[field.key] = null;
+                else return { ok: false, error: "please fill in " + field.label + "." };
+              } else {
+                var n = Number(raw);
+                if (isNaN(n)) return { ok: false, error: "invalid number for " + field.label + "." };
+                if (field.min != null && n < field.min) {
+                  return { ok: false, error: field.label + " must be at least " + field.min + "." };
+                }
+                data[field.key] = field.places != null ? round(n, field.places) : n;
+              }
+            } else if (field.type === "datetime-local") {
+              data[field.key] = fromLocalInput(raw);
+            } else {
+              var text = String(raw || "").trim();
+              if (field.lower) text = text.toLowerCase();
+              if (!text && !field.optional) {
+                return { ok: false, error: "please fill in " + field.label + "." };
+              }
+              data[field.key] = text;
+            }
+          }
+          if (config.validate) {
+            var extra = config.validate(data, editingId, store.all());
+            if (extra) return { ok: false, error: extra };
+          }
+          return { ok: true, data: data };
+        }
+
+        function fillForm(row) {
+          fields.forEach(function (field) {
+            var value = row[field.key];
+            if (field.type === "datetime-local") {
+              inputs[field.key].value = toLocalInput(value);
+            } else if (value == null) {
+              inputs[field.key].value = "";
+            } else {
+              inputs[field.key].value = value;
+            }
+          });
+        }
+
+        function resetForm() {
+          editingId = null;
+          form.reset();
+          submitBtn.textContent = "add";
+          cancelBtn.hidden = true;
+          fields.forEach(function (field) {
+            if (field.defaultValue != null && typeof field.defaultValue === "function") {
+              if (field.type === "datetime-local") {
+                inputs[field.key].value = toLocalInput(field.defaultValue());
+              } else {
+                inputs[field.key].value = field.defaultValue();
+              }
+            }
+          });
+        }
+
+        function displayValue(field, row) {
+          var value = row[field.key];
+          if (field.format) return field.format(value, row);
+          if (value == null || value === "") return "—";
+          if (field.type === "datetime-local") return formatWhen(value);
+          return value;
+        }
+
+        function sortedItems() {
+          var items = store.all().slice();
+          if (config.sort) items.sort(config.sort);
+          return items;
+        }
+
+        function render() {
+          tbody.innerHTML = "";
+          var items = sortedItems();
+          items.forEach(function (row) {
+            var tr = document.createElement("tr");
+            fields.forEach(function (field) {
+              var td = document.createElement("td");
+              td.textContent = displayValue(field, row);
+              tr.appendChild(td);
+            });
+            var tdAct = document.createElement("td");
+            var editBtn = document.createElement("button");
+            editBtn.type = "button";
+            editBtn.textContent = "edit";
+            editBtn.addEventListener("click", function () {
+              editingId = row.id;
+              fillForm(row);
+              submitBtn.textContent = "save";
+              cancelBtn.hidden = false;
+              setMessage("editing — save or cancel.");
+              form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            });
+            var delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.textContent = "delete";
+            delBtn.addEventListener("click", function () {
+              if (!window.confirm("delete this entry?")) return;
+              var result = store.remove(row.id);
+              if (!result.ok) {
+                setMessage(result.error);
+                return;
+              }
+              if (editingId === row.id) resetForm();
+              setMessage("deleted.");
+              render();
+            });
+            tdAct.appendChild(editBtn);
+            tdAct.appendChild(document.createTextNode(" "));
+            tdAct.appendChild(delBtn);
+            tr.appendChild(tdAct);
+            tbody.appendChild(tr);
+          });
+          listeners.forEach(function (fn) { fn(items); });
+        }
+
+        form.addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          var parsed = readForm();
+          if (!parsed.ok) {
+            setMessage(parsed.error);
+            return;
+          }
+          var result = editingId
+            ? store.update(editingId, parsed.data)
+            : store.create(parsed.data);
+          if (!result.ok) {
+            setMessage(result.error);
+            return;
+          }
+          setMessage(editingId ? "saved." : "added.");
+          resetForm();
+          render();
+        });
+
+        cancelBtn.addEventListener("click", function () {
+          resetForm();
+          setMessage("");
+        });
+
+        resetForm();
+        render();
+
+        return {
+          store: store,
+          onChange: function (fn) { listeners.push(fn); },
+          refresh: render,
+          create: function (data) {
+            var result = store.create(data);
+            if (result.ok) render();
+            return result;
+          },
+          all: function () { return store.all(); }
+        };
+      }
+
+      /* ---------- app wiring ---------- */
+      var foods = Crud(document.getElementById("foods-panel"), {
+        title: "foods",
+        store: Store("aria_foods"),
+        fields: [
+          { key: "name", label: "name", type: "text", required: true, lower: true, maxLength: 60 },
+          { key: "c100", label: "carbs / 100 g", type: "number", required: true, min: 0, step: "any", places: 2 },
+          { key: "portion", label: "typical portion (g)", type: "number", optional: true, min: 0, step: "any", places: 2 }
+        ],
+        validate: function (data, editingId, items) {
+          for (var i = 0; i < items.length; i++) {
+            if (items[i].name === data.name && items[i].id !== editingId) {
+              return "a food with that name already exists.";
+            }
+          }
+          return null;
+        },
+        sort: function (a, b) { return a.name.localeCompare(b.name); }
+      });
+
+      var icrLog = Crud(document.getElementById("icr-panel"), {
+        title: "icr history",
+        store: Store("aria_icr_log", { trimOldest: true }),
+        fields: [
+          {
+            key: "from",
+            label: "from",
+            type: "datetime-local",
+            required: true,
+            defaultValue: function () { return new Date().toISOString(); }
+          },
+          { key: "icr", label: "icr (1 u : x g carbs)", type: "number", required: true, min: 0.1, step: "any", places: 2 },
+          { key: "note", label: "note", type: "text", optional: true, lower: true, maxLength: 80 }
+        ],
+        sort: function (a, b) { return String(b.from).localeCompare(String(a.from)); }
+      });
+
+      var calcLog = Crud(document.getElementById("log-panel"), {
+        title: "calculation log",
+        store: Store("aria_log", { trimOldest: true }),
+        fields: [
+          {
+            key: "t",
+            label: "when",
+            type: "datetime-local",
+            required: true,
+            defaultValue: function () { return new Date().toISOString(); }
+          },
+          { key: "food", label: "food", type: "text", optional: true, lower: true, maxLength: 60 },
+          { key: "c100", label: "carbs / 100 g", type: "number", required: true, min: 0, step: "any", places: 2 },
+          { key: "g", label: "portion (g)", type: "number", required: true, min: 0, step: "any", places: 2 },
+          { key: "carbs", label: "carbs (g)", type: "number", required: true, min: 0, step: "any", places: 2 },
+          { key: "icr", label: "icr", type: "number", required: true, min: 0.1, step: "any", places: 2 },
+          { key: "u", label: "insulin (u)", type: "number", required: true, min: 0, step: "any", places: 2 },
+          { key: "note", label: "note", type: "text", optional: true, lower: true, maxLength: 80 }
+        ],
+        sort: function (a, b) { return String(b.t).localeCompare(String(a.t)); }
+      });
+
+      // migrate old single icr cookie into history once
+      (function migrateOldIcr() {
+        if (icrLog.all().length) return;
+        var old = getCookie("aria_icr");
+        var value = old && !isNaN(Number(old)) && Number(old) > 0 ? Number(old) : 10;
+        icrLog.create({
+          from: new Date().toISOString(),
+          icr: round(value, 2),
+          note: "starting value"
+        });
+      })();
+
+      function fillSelect(select, items, opts) {
+        opts = opts || {};
+        var previous = select.value;
+        select.innerHTML = "";
+        if (opts.blankLabel != null) {
+          var blank = document.createElement("option");
+          blank.value = "";
+          blank.textContent = opts.blankLabel;
+          select.appendChild(blank);
+        }
+        items.forEach(function (item) {
+          var opt = document.createElement("option");
+          opt.value = item.id;
+          opt.textContent = opts.label(item);
+          select.appendChild(opt);
+        });
+        if (previous && select.querySelector('option[value="' + previous + '"]')) {
+          select.value = previous;
+        } else if (opts.selectFirst && items.length) {
+          select.value = items[0].id;
+        }
+      }
+
+      var foodSelect = document.getElementById("food-select");
+      var icrSelect = document.getElementById("icr-select");
+
+      function refreshFoodSelect(items) {
+        fillSelect(foodSelect, items, {
+          blankLabel: "— custom / none —",
+          label: function (f) { return f.name; }
+        });
+      }
+
+      function refreshIcrSelect(items) {
+        fillSelect(icrSelect, items, {
+          selectFirst: true,
+          label: function (row) {
+            return row.icr + " (from " + formatWhen(row.from) + ")" +
+              (row.note ? " — " + row.note : "");
+          }
+        });
+      }
+
+      function applyFood() {
+        var row = foods.store.get(foodSelect.value);
+        if (!row) return;
+        document.getElementById("carb-per-100").value = row.c100;
+        if (row.portion != null) document.getElementById("portion-g").value = row.portion;
+      }
+
+      foods.onChange(refreshFoodSelect);
+      icrLog.onChange(refreshIcrSelect);
+      refreshFoodSelect(foods.all().slice().sort(function (a, b) { return a.name.localeCompare(b.name); }));
+      refreshIcrSelect(icrLog.all().slice().sort(function (a, b) {
+        return String(b.from).localeCompare(String(a.from));
+      }));
+
+      foodSelect.addEventListener("change", applyFood);
+
       document.getElementById("calc-form").addEventListener("submit", function (ev) {
         ev.preventDefault();
-
         var carbPer100 = Number(document.getElementById("carb-per-100").value);
         var portionG = Number(document.getElementById("portion-g").value);
-        var icr = Number(document.getElementById("icr").value);
-        var note = document.getElementById("note").value.trim();
+        var icrRow = icrLog.store.get(icrSelect.value);
+        var note = document.getElementById("note").value.trim().toLowerCase();
+        var foodRow = foods.store.get(foodSelect.value);
 
-        if (!(carbPer100 >= 0) || !(portionG >= 0) || !(icr > 0)) {
-          document.getElementById("result").textContent = "Please enter valid numbers. ICR must be greater than 0.";
+        if (!icrRow || !(icrRow.icr > 0)) {
+          document.getElementById("result").textContent = "add an icr entry first.";
+          return;
+        }
+        if (!(carbPer100 >= 0) || !(portionG >= 0)) {
+          document.getElementById("result").textContent = "please enter valid numbers.";
           return;
         }
 
-        var result = calculate(carbPer100, portionG, icr);
-        saveIcr(icr);
+        var carbs = round((carbPer100 / 100) * portionG, 2);
+        var units = round(carbs / icrRow.icr, 2);
 
         document.getElementById("result").textContent =
-          "Carbs in portion: " +
-          result.carbs +
-          " g. Suggested insulin: " +
-          result.units +
-          " units (1 U covers " +
-          icr +
-          " g carbs). Check with your usual regimen before dosing.";
+          "carbs in portion: " + carbs + " g. suggested insulin: " + units +
+          " units (1 u covers " + icrRow.icr + " g carbs). check with your usual regimen before dosing.";
 
-        var entries = loadLog();
-        entries.push({
+        var result = calcLog.create({
           t: new Date().toISOString(),
+          food: foodRow ? foodRow.name : "",
           c100: round(carbPer100, 2),
           g: round(portionG, 2),
-          carbs: result.carbs,
-          icr: round(icr, 2),
-          u: result.units,
+          carbs: carbs,
+          icr: round(icrRow.icr, 2),
+          u: units,
           note: note
         });
-        entries = saveLog(entries);
-        renderLog(entries);
-      });
 
-      document.getElementById("clear-log").addEventListener("click", function () {
-        if (window.confirm("Clear the entire calculation log on this browser?")) {
-          saveLog([]);
-          renderLog([]);
+        if (!result.ok) {
+          document.getElementById("result").textContent += " (could not save log: " + result.error + ")";
         }
       });
-
-      // Remember ICR when they tweak it (even before calculate)
-      document.getElementById("icr").addEventListener("change", function () {
-        var icr = Number(document.getElementById("icr").value);
-        if (icr > 0) saveIcr(icr);
-      });
-
-      loadIcr();
-      renderLog(loadLog());
     })();
   </script>
 </body>
