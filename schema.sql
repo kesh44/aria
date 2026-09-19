@@ -26,3 +26,8 @@ create table if not exists calc_log (
   u double precision not null,
   note text
 );
+
+create table if not exists rate_limit (
+  key text primary key,
+  last_at timestamptz not null
+);

@@ -1,10 +1,10 @@
 import {
   sql,
-  requireAuth,
   newId,
   readJson,
   handleOptions,
   iso,
+  limitWrite,
 } from "../lib/server.js";
 
 function mapRow(row) {
@@ -18,9 +18,12 @@ function mapRow(row) {
 
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
-  if (!requireAuth(req, res)) return;
 
   try {
+    if (req.method !== "GET") {
+      if (!(await limitWrite(res))) return;
+    }
+
     const db = sql();
 
     if (req.method === "GET") {

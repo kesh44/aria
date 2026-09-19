@@ -1,16 +1,19 @@
 import {
   sql,
-  requireAuth,
   newId,
   readJson,
   handleOptions,
+  limitWrite,
 } from "../lib/server.js";
 
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
-  if (!requireAuth(req, res)) return;
 
   try {
+    if (req.method !== "GET") {
+      if (!(await limitWrite(res))) return;
+    }
+
     const db = sql();
 
     if (req.method === "GET") {
