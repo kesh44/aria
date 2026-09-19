@@ -6,71 +6,66 @@
   <title>carb &amp; insulin calculator</title>
 </head>
 <body>
-  <h1>carb &amp; insulin calculator</h1>
-  <p>uk metrics. foods, icr history, and the calculation log are editable lists stored in cookies on this browser.</p>
+  <div id="login-gate">
+    <h1>carb &amp; insulin calculator</h1>
+    <p>enter the shared password to load data from the database.</p>
+    <form id="login-form">
+      <p>
+        <label for="password">password</label><br>
+        <input type="password" id="password" required autocomplete="current-password">
+      </p>
+      <p>
+        <button type="submit">unlock</button>
+      </p>
+    </form>
+    <p id="login-msg"></p>
+  </div>
 
-  <h2>calculate</h2>
-  <form id="calc-form">
-    <p>
-      <label for="food-select">food</label><br>
-      <select id="food-select"></select>
-    </p>
-    <p>
-      <label for="carb-per-100">carbs per 100 g (g)</label><br>
-      <input type="number" id="carb-per-100" min="0" step="any" required>
-    </p>
-    <p>
-      <label for="portion-g">portion (g)</label><br>
-      <input type="number" id="portion-g" min="0" step="any" required>
-    </p>
-    <p>
-      <label for="icr-select">icr</label><br>
-      <select id="icr-select"></select>
-    </p>
-    <p>
-      <label for="note">note (optional)</label><br>
-      <input type="text" id="note" maxlength="80">
-    </p>
-    <p>
-      <button type="submit">calculate &amp; log</button>
-    </p>
-  </form>
-  <p id="result">no calculation yet.</p>
+  <div id="app" hidden>
+    <h1>carb &amp; insulin calculator</h1>
+    <p>uk metrics. foods, icr history, and the calculation log are saved in neon postgres.</p>
+    <p><button type="button" id="lock-btn">lock</button></p>
 
-  <div id="foods-panel"></div>
-  <div id="icr-panel"></div>
-  <div id="log-panel"></div>
+    <h2>calculate</h2>
+    <form id="calc-form">
+      <p>
+        <label for="food-select">food</label><br>
+        <select id="food-select"></select>
+      </p>
+      <p>
+        <label for="carb-per-100">carbs per 100 g (g)</label><br>
+        <input type="number" id="carb-per-100" min="0" step="any" required>
+      </p>
+      <p>
+        <label for="portion-g">portion (g)</label><br>
+        <input type="number" id="portion-g" min="0" step="any" required>
+      </p>
+      <p>
+        <label for="icr-select">icr</label><br>
+        <select id="icr-select"></select>
+      </p>
+      <p>
+        <label for="note">note (optional)</label><br>
+        <input type="text" id="note" maxlength="80">
+      </p>
+      <p>
+        <button type="submit">calculate &amp; log</button>
+      </p>
+    </form>
+    <p id="result">no calculation yet.</p>
+
+    <div id="foods-panel"></div>
+    <div id="icr-panel"></div>
+    <div id="log-panel"></div>
+  </div>
 
   <script>
     (function () {
-      var MAX_AGE = 60 * 60 * 24 * 365 * 10;
-      var MAX_CHARS = 3500;
-
-      function setCookie(name, value) {
-        document.cookie =
-          encodeURIComponent(name) + "=" + encodeURIComponent(value) +
-          "; path=/; max-age=" + MAX_AGE + "; SameSite=Lax";
-      }
-
-      function getCookie(name) {
-        var key = encodeURIComponent(name) + "=";
-        var parts = document.cookie.split(";");
-        for (var i = 0; i < parts.length; i++) {
-          var part = parts[i].trim();
-          if (part.indexOf(key) === 0) {
-            return decodeURIComponent(part.substring(key.length));
-          }
-        }
-        return null;
-      }
+      var TOKEN_KEY = "aria_password";
 
       function round(n, places) {
         var f = Math.pow(10, places);
         return Math.round(Number(n) * f) / f;
-      }
-
-      function newId() {
-        return String(Date.now()) + "-" + Math.floor(Math.random() * 1000);
       }
 
       function toLocalInput(iso) {
@@ -93,72 +88,91 @@
         catch (e) { return iso || ""; }
       }
 
-      /* ---------- cookie list store ---------- */
-      function Store(cookieName, opts) {
+      function getPassword() {
+        return localStorage.getItem(TOKEN_KEY) || "";
+      }
+
+      function setPassword(value) {
+        if (value) localStorage.setItem(TOKEN_KEY, value);
+        else localStorage.removeItem(TOKEN_KEY);
+      }
+
+      async function api(path, opts) {
         opts = opts || {};
-        var maxChars = opts.maxChars || MAX_CHARS;
-        var trimOldest = !!opts.trimOldest;
-
-        function all() {
-          var raw = getCookie(cookieName);
-          if (!raw) return [];
-          try {
-            var parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? parsed : [];
-          } catch (e) {
-            return [];
-          }
+        var headers = Object.assign(
+          { "Content-Type": "application/json", Authorization: "Bearer " + getPassword() },
+          opts.headers || {}
+        );
+        var res = await fetch(path, {
+          method: opts.method || "GET",
+          headers: headers,
+          body: opts.body != null ? JSON.stringify(opts.body) : undefined
+        });
+        var data = null;
+        var text = await res.text();
+        if (text) {
+          try { data = JSON.parse(text); }
+          catch (e) { data = { error: text }; }
         }
-
-        function write(items) {
-          var copy = items.slice();
-          while (true) {
-            var value = JSON.stringify(copy);
-            if (value.length <= maxChars) {
-              setCookie(cookieName, value);
-              return { ok: true, items: copy };
-            }
-            if (!trimOldest || copy.length === 0) {
-              return { ok: false, items: items, error: "storage full — remove some entries first." };
-            }
-            copy.shift();
-          }
+        if (!res.ok) {
+          var err = new Error((data && data.error) || ("request failed (" + res.status + ")"));
+          err.status = res.status;
+          throw err;
         }
+        return data;
+      }
+
+      /* ---------- api-backed list store ---------- */
+      function ApiStore(path) {
+        var cache = [];
 
         return {
-          all: all,
-          write: write,
+          all: function () { return cache.slice(); },
           get: function (id) {
-            var items = all();
-            for (var i = 0; i < items.length; i++) {
-              if (items[i].id === id) return items[i];
+            for (var i = 0; i < cache.length; i++) {
+              if (cache[i].id === id) return cache[i];
             }
             return null;
           },
-          create: function (data) {
-            var items = all();
-            var row = Object.assign({ id: newId() }, data);
-            items.push(row);
-            var result = write(items);
-            return result.ok ? { ok: true, row: row, items: result.items } : result;
+          load: async function () {
+            cache = await api(path);
+            if (!Array.isArray(cache)) cache = [];
+            return cache.slice();
           },
-          update: function (id, data) {
-            var items = all();
-            var found = false;
-            for (var i = 0; i < items.length; i++) {
-              if (items[i].id === id) {
-                items[i] = Object.assign({}, items[i], data, { id: id });
-                found = true;
-                break;
-              }
+          create: async function (data) {
+            try {
+              var row = await api(path, { method: "POST", body: data });
+              cache.push(row);
+              return { ok: true, row: row, items: cache.slice() };
+            } catch (err) {
+              return { ok: false, error: err.message };
             }
-            if (!found) return { ok: false, error: "entry not found." };
-            var result = write(items);
-            return result.ok ? { ok: true, items: result.items } : result;
           },
-          remove: function (id) {
-            var items = all().filter(function (row) { return row.id !== id; });
-            return write(items);
+          update: async function (id, data) {
+            try {
+              var row = await api(path, {
+                method: "PUT",
+                body: Object.assign({}, data, { id: id })
+              });
+              for (var i = 0; i < cache.length; i++) {
+                if (cache[i].id === id) {
+                  cache[i] = row;
+                  break;
+                }
+              }
+              return { ok: true, row: row, items: cache.slice() };
+            } catch (err) {
+              return { ok: false, error: err.message };
+            }
+          },
+          remove: async function (id) {
+            try {
+              await api(path + "?id=" + encodeURIComponent(id), { method: "DELETE" });
+              cache = cache.filter(function (row) { return row.id !== id; });
+              return { ok: true, items: cache.slice() };
+            } catch (err) {
+              return { ok: false, error: err.message };
+            }
           }
         };
       }
@@ -185,17 +199,11 @@
           p.appendChild(label);
           p.appendChild(document.createElement("br"));
 
-          var input;
-          if (field.type === "textarea") {
-            input = document.createElement("textarea");
-            input.rows = 2;
-          } else {
-            input = document.createElement("input");
-            input.type = field.type || "text";
-            if (field.min != null) input.min = field.min;
-            if (field.step != null) input.step = field.step;
-            if (field.maxLength != null) input.maxLength = field.maxLength;
-          }
+          var input = document.createElement("input");
+          input.type = field.type || "text";
+          if (field.min != null) input.min = field.min;
+          if (field.step != null) input.step = field.step;
+          if (field.maxLength != null) input.maxLength = field.maxLength;
           if (field.required) input.required = true;
           input.name = field.key;
           inputs[field.key] = input;
@@ -230,9 +238,7 @@
           th.textContent = field.label;
           headRow.appendChild(th);
         });
-        var thActions = document.createElement("th");
-        thActions.textContent = "";
-        headRow.appendChild(thActions);
+        headRow.appendChild(document.createElement("th"));
         thead.appendChild(headRow);
         table.appendChild(thead);
         var tbody = document.createElement("tbody");
@@ -281,13 +287,9 @@
         function fillForm(row) {
           fields.forEach(function (field) {
             var value = row[field.key];
-            if (field.type === "datetime-local") {
-              inputs[field.key].value = toLocalInput(value);
-            } else if (value == null) {
-              inputs[field.key].value = "";
-            } else {
-              inputs[field.key].value = value;
-            }
+            if (field.type === "datetime-local") inputs[field.key].value = toLocalInput(value);
+            else if (value == null) inputs[field.key].value = "";
+            else inputs[field.key].value = value;
           });
         }
 
@@ -297,7 +299,7 @@
           submitBtn.textContent = "add";
           cancelBtn.hidden = true;
           fields.forEach(function (field) {
-            if (field.defaultValue != null && typeof field.defaultValue === "function") {
+            if (typeof field.defaultValue === "function") {
               if (field.type === "datetime-local") {
                 inputs[field.key].value = toLocalInput(field.defaultValue());
               } else {
@@ -316,7 +318,7 @@
         }
 
         function sortedItems() {
-          var items = store.all().slice();
+          var items = store.all();
           if (config.sort) items.sort(config.sort);
           return items;
         }
@@ -341,14 +343,14 @@
               submitBtn.textContent = "save";
               cancelBtn.hidden = false;
               setMessage("editing — save or cancel.");
-              form.scrollIntoView({ behavior: "smooth", block: "nearest" });
             });
             var delBtn = document.createElement("button");
             delBtn.type = "button";
             delBtn.textContent = "delete";
-            delBtn.addEventListener("click", function () {
+            delBtn.addEventListener("click", async function () {
               if (!window.confirm("delete this entry?")) return;
-              var result = store.remove(row.id);
+              setMessage("deleting…");
+              var result = await store.remove(row.id);
               if (!result.ok) {
                 setMessage(result.error);
                 return;
@@ -366,16 +368,17 @@
           listeners.forEach(function (fn) { fn(items); });
         }
 
-        form.addEventListener("submit", function (ev) {
+        form.addEventListener("submit", async function (ev) {
           ev.preventDefault();
           var parsed = readForm();
           if (!parsed.ok) {
             setMessage(parsed.error);
             return;
           }
+          setMessage("saving…");
           var result = editingId
-            ? store.update(editingId, parsed.data)
-            : store.create(parsed.data);
+            ? await store.update(editingId, parsed.data)
+            : await store.create(parsed.data);
           if (!result.ok) {
             setMessage(result.error);
             return;
@@ -391,91 +394,30 @@
         });
 
         resetForm();
-        render();
 
         return {
           store: store,
           onChange: function (fn) { listeners.push(fn); },
           refresh: render,
-          create: function (data) {
-            var result = store.create(data);
+          load: async function () {
+            setMessage("loading…");
+            try {
+              await store.load();
+              setMessage("");
+              render();
+            } catch (err) {
+              setMessage(err.message);
+              throw err;
+            }
+          },
+          create: async function (data) {
+            var result = await store.create(data);
             if (result.ok) render();
             return result;
           },
           all: function () { return store.all(); }
         };
       }
-
-      /* ---------- app wiring ---------- */
-      var foods = Crud(document.getElementById("foods-panel"), {
-        title: "foods",
-        store: Store("aria_foods"),
-        fields: [
-          { key: "name", label: "name", type: "text", required: true, lower: true, maxLength: 60 },
-          { key: "c100", label: "carbs / 100 g", type: "number", required: true, min: 0, step: "any", places: 2 },
-          { key: "portion", label: "typical portion (g)", type: "number", optional: true, min: 0, step: "any", places: 2 }
-        ],
-        validate: function (data, editingId, items) {
-          for (var i = 0; i < items.length; i++) {
-            if (items[i].name === data.name && items[i].id !== editingId) {
-              return "a food with that name already exists.";
-            }
-          }
-          return null;
-        },
-        sort: function (a, b) { return a.name.localeCompare(b.name); }
-      });
-
-      var icrLog = Crud(document.getElementById("icr-panel"), {
-        title: "icr history",
-        store: Store("aria_icr_log", { trimOldest: true }),
-        fields: [
-          {
-            key: "from",
-            label: "from",
-            type: "datetime-local",
-            required: true,
-            defaultValue: function () { return new Date().toISOString(); }
-          },
-          { key: "icr", label: "icr (1 u : x g carbs)", type: "number", required: true, min: 0.1, step: "any", places: 2 },
-          { key: "note", label: "note", type: "text", optional: true, lower: true, maxLength: 80 }
-        ],
-        sort: function (a, b) { return String(b.from).localeCompare(String(a.from)); }
-      });
-
-      var calcLog = Crud(document.getElementById("log-panel"), {
-        title: "calculation log",
-        store: Store("aria_log", { trimOldest: true }),
-        fields: [
-          {
-            key: "t",
-            label: "when",
-            type: "datetime-local",
-            required: true,
-            defaultValue: function () { return new Date().toISOString(); }
-          },
-          { key: "food", label: "food", type: "text", optional: true, lower: true, maxLength: 60 },
-          { key: "c100", label: "carbs / 100 g", type: "number", required: true, min: 0, step: "any", places: 2 },
-          { key: "g", label: "portion (g)", type: "number", required: true, min: 0, step: "any", places: 2 },
-          { key: "carbs", label: "carbs (g)", type: "number", required: true, min: 0, step: "any", places: 2 },
-          { key: "icr", label: "icr", type: "number", required: true, min: 0.1, step: "any", places: 2 },
-          { key: "u", label: "insulin (u)", type: "number", required: true, min: 0, step: "any", places: 2 },
-          { key: "note", label: "note", type: "text", optional: true, lower: true, maxLength: 80 }
-        ],
-        sort: function (a, b) { return String(b.t).localeCompare(String(a.t)); }
-      });
-
-      // migrate old single icr cookie into history once
-      (function migrateOldIcr() {
-        if (icrLog.all().length) return;
-        var old = getCookie("aria_icr");
-        var value = old && !isNaN(Number(old)) && Number(old) > 0 ? Number(old) : 10;
-        icrLog.create({
-          from: new Date().toISOString(),
-          icr: round(value, 2),
-          note: "starting value"
-        });
-      })();
 
       function fillSelect(select, items, opts) {
         opts = opts || {};
@@ -500,81 +442,192 @@
         }
       }
 
-      var foodSelect = document.getElementById("food-select");
-      var icrSelect = document.getElementById("icr-select");
+      var foods;
+      var icrLog;
+      var calcLog;
+      var started = false;
 
-      function refreshFoodSelect(items) {
-        fillSelect(foodSelect, items, {
-          blankLabel: "— custom / none —",
-          label: function (f) { return f.name; }
+      async function startApp() {
+        if (started) {
+          await Promise.all([foods.load(), icrLog.load(), calcLog.load()]);
+          return;
+        }
+        started = true;
+
+        foods = Crud(document.getElementById("foods-panel"), {
+          title: "foods",
+          store: ApiStore("/api/foods"),
+          fields: [
+            { key: "name", label: "name", type: "text", required: true, lower: true, maxLength: 60 },
+            { key: "c100", label: "carbs / 100 g", type: "number", required: true, min: 0, step: "any", places: 2 },
+            { key: "portion", label: "typical portion (g)", type: "number", optional: true, min: 0, step: "any", places: 2 }
+          ],
+          validate: function (data, editingId, items) {
+            for (var i = 0; i < items.length; i++) {
+              if (items[i].name === data.name && items[i].id !== editingId) {
+                return "a food with that name already exists.";
+              }
+            }
+            return null;
+          },
+          sort: function (a, b) { return a.name.localeCompare(b.name); }
         });
-      }
 
-      function refreshIcrSelect(items) {
-        fillSelect(icrSelect, items, {
-          selectFirst: true,
-          label: function (row) {
-            return row.icr + " (from " + formatWhen(row.from) + ")" +
-              (row.note ? " — " + row.note : "");
+        icrLog = Crud(document.getElementById("icr-panel"), {
+          title: "icr history",
+          store: ApiStore("/api/icr"),
+          fields: [
+            {
+              key: "from",
+              label: "from",
+              type: "datetime-local",
+              required: true,
+              defaultValue: function () { return new Date().toISOString(); }
+            },
+            { key: "icr", label: "icr (1 u : x g carbs)", type: "number", required: true, min: 0.1, step: "any", places: 2 },
+            { key: "note", label: "note", type: "text", optional: true, lower: true, maxLength: 80 }
+          ],
+          sort: function (a, b) { return String(b.from).localeCompare(String(a.from)); }
+        });
+
+        calcLog = Crud(document.getElementById("log-panel"), {
+          title: "calculation log",
+          store: ApiStore("/api/log"),
+          fields: [
+            {
+              key: "t",
+              label: "when",
+              type: "datetime-local",
+              required: true,
+              defaultValue: function () { return new Date().toISOString(); }
+            },
+            { key: "food", label: "food", type: "text", optional: true, lower: true, maxLength: 60 },
+            { key: "c100", label: "carbs / 100 g", type: "number", required: true, min: 0, step: "any", places: 2 },
+            { key: "g", label: "portion (g)", type: "number", required: true, min: 0, step: "any", places: 2 },
+            { key: "carbs", label: "carbs (g)", type: "number", required: true, min: 0, step: "any", places: 2 },
+            { key: "icr", label: "icr", type: "number", required: true, min: 0.1, step: "any", places: 2 },
+            { key: "u", label: "insulin (u)", type: "number", required: true, min: 0, step: "any", places: 2 },
+            { key: "note", label: "note", type: "text", optional: true, lower: true, maxLength: 80 }
+          ],
+          sort: function (a, b) { return String(b.t).localeCompare(String(a.t)); }
+        });
+
+        var foodSelect = document.getElementById("food-select");
+        var icrSelect = document.getElementById("icr-select");
+
+        foods.onChange(function (items) {
+          fillSelect(foodSelect, items, {
+            blankLabel: "— custom / none —",
+            label: function (f) { return f.name; }
+          });
+        });
+
+        icrLog.onChange(function (items) {
+          fillSelect(icrSelect, items, {
+            selectFirst: true,
+            label: function (row) {
+              return row.icr + " (from " + formatWhen(row.from) + ")" +
+                (row.note ? " — " + row.note : "");
+            }
+          });
+        });
+
+        foodSelect.addEventListener("change", function () {
+          var row = foods.store.get(foodSelect.value);
+          if (!row) return;
+          document.getElementById("carb-per-100").value = row.c100;
+          if (row.portion != null) document.getElementById("portion-g").value = row.portion;
+        });
+
+        document.getElementById("calc-form").addEventListener("submit", async function (ev) {
+          ev.preventDefault();
+          var carbPer100 = Number(document.getElementById("carb-per-100").value);
+          var portionG = Number(document.getElementById("portion-g").value);
+          var icrRow = icrLog.store.get(icrSelect.value);
+          var note = document.getElementById("note").value.trim().toLowerCase();
+          var foodRow = foods.store.get(foodSelect.value);
+
+          if (!icrRow || !(icrRow.icr > 0)) {
+            document.getElementById("result").textContent = "add an icr entry first.";
+            return;
+          }
+          if (!(carbPer100 >= 0) || !(portionG >= 0)) {
+            document.getElementById("result").textContent = "please enter valid numbers.";
+            return;
+          }
+
+          var carbs = round((carbPer100 / 100) * portionG, 2);
+          var units = round(carbs / icrRow.icr, 2);
+
+          document.getElementById("result").textContent =
+            "carbs in portion: " + carbs + " g. suggested insulin: " + units +
+            " units (1 u covers " + icrRow.icr + " g carbs). check with your usual regimen before dosing.";
+
+          var result = await calcLog.create({
+            t: new Date().toISOString(),
+            food: foodRow ? foodRow.name : "",
+            c100: round(carbPer100, 2),
+            g: round(portionG, 2),
+            carbs: carbs,
+            icr: round(icrRow.icr, 2),
+            u: units,
+            note: note
+          });
+
+          if (!result.ok) {
+            document.getElementById("result").textContent += " (could not save log: " + result.error + ")";
           }
         });
-      }
 
-      function applyFood() {
-        var row = foods.store.get(foodSelect.value);
-        if (!row) return;
-        document.getElementById("carb-per-100").value = row.c100;
-        if (row.portion != null) document.getElementById("portion-g").value = row.portion;
-      }
-
-      foods.onChange(refreshFoodSelect);
-      icrLog.onChange(refreshIcrSelect);
-      refreshFoodSelect(foods.all().slice().sort(function (a, b) { return a.name.localeCompare(b.name); }));
-      refreshIcrSelect(icrLog.all().slice().sort(function (a, b) {
-        return String(b.from).localeCompare(String(a.from));
-      }));
-
-      foodSelect.addEventListener("change", applyFood);
-
-      document.getElementById("calc-form").addEventListener("submit", function (ev) {
-        ev.preventDefault();
-        var carbPer100 = Number(document.getElementById("carb-per-100").value);
-        var portionG = Number(document.getElementById("portion-g").value);
-        var icrRow = icrLog.store.get(icrSelect.value);
-        var note = document.getElementById("note").value.trim().toLowerCase();
-        var foodRow = foods.store.get(foodSelect.value);
-
-        if (!icrRow || !(icrRow.icr > 0)) {
-          document.getElementById("result").textContent = "add an icr entry first.";
-          return;
-        }
-        if (!(carbPer100 >= 0) || !(portionG >= 0)) {
-          document.getElementById("result").textContent = "please enter valid numbers.";
-          return;
-        }
-
-        var carbs = round((carbPer100 / 100) * portionG, 2);
-        var units = round(carbs / icrRow.icr, 2);
-
-        document.getElementById("result").textContent =
-          "carbs in portion: " + carbs + " g. suggested insulin: " + units +
-          " units (1 u covers " + icrRow.icr + " g carbs). check with your usual regimen before dosing.";
-
-        var result = calcLog.create({
-          t: new Date().toISOString(),
-          food: foodRow ? foodRow.name : "",
-          c100: round(carbPer100, 2),
-          g: round(portionG, 2),
-          carbs: carbs,
-          icr: round(icrRow.icr, 2),
-          u: units,
-          note: note
+        document.getElementById("lock-btn").addEventListener("click", function () {
+          setPassword("");
+          document.getElementById("app").hidden = true;
+          document.getElementById("login-gate").hidden = false;
+          document.getElementById("login-msg").textContent = "locked.";
         });
 
-        if (!result.ok) {
-          document.getElementById("result").textContent += " (could not save log: " + result.error + ")";
+        await Promise.all([foods.load(), icrLog.load(), calcLog.load()]);
+
+        if (!icrLog.all().length) {
+          await icrLog.create({
+            from: new Date().toISOString(),
+            icr: 10,
+            note: "starting value"
+          });
+        }
+      }
+
+      async function unlock(password) {
+        setPassword(password);
+        await api("/api/auth", { method: "POST" });
+        document.getElementById("login-gate").hidden = true;
+        document.getElementById("app").hidden = false;
+        await startApp();
+      }
+
+      document.getElementById("login-form").addEventListener("submit", async function (ev) {
+        ev.preventDefault();
+        var password = document.getElementById("password").value;
+        var msg = document.getElementById("login-msg");
+        msg.textContent = "checking…";
+        try {
+          await unlock(password);
+          msg.textContent = "";
+        } catch (err) {
+          setPassword("");
+          msg.textContent = err.status === 401
+            ? "wrong password."
+            : err.message;
         }
       });
+
+      if (getPassword()) {
+        unlock(getPassword()).catch(function () {
+          setPassword("");
+          document.getElementById("login-msg").textContent =
+            "session expired — enter password again.";
+        });
+      }
     })();
   </script>
 </body>
